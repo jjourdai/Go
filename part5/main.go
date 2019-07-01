@@ -18,6 +18,8 @@ const (
 	EOF = 6
 	NONE = 7
 	OPERATOR = 8
+	LEFT = 9
+	RIGHT = 10
 )
 
 type token struct {
@@ -70,6 +72,8 @@ func tokenizer() func(string) int {
 		"/" : DIV,
 		"+" : PLUS,
 		"-" : MINUS,
+		"(" : LEFT,
+		")" : RIGHT,
 	}
 	return func(key string) int {
 		return tokens[key]
@@ -133,38 +137,40 @@ func isMult(typ int) bool {
 /*
 	expres : term ((PLUS | MINUS) term) *
 	term : factor ((MUL | DIV) Factor) *
-	factor : integer
+	factor : integer | ( expres )
 */
 
-func integer(cur *token, needed int) int {
-	if cur.typ != needed {
-		fmt.Printf("Error parsing need %d has %d\n", needed, cur.typ)
+func (i *interpreter) factor(cur *token) int {
+	if cur.typ == INTEGER {
+		value, _ := strconv.Atoi(cur.value)
+		return value
+	} else if cur.typ == LEFT {
+		i.next()
+		result := i.expre()
+		return result
+	} else {
+		fmt.Fprintf(os.Stderr, "Syntax Error has %d\n", i.cur().typ)
 		os.Exit(-1)
 	}
-	value, _ := strconv.Atoi(cur.value)
-	return value
-}
-
-func factor(cur *token) int {
-	return integer(cur, INTEGER)
+	return 0
 }
 
 func (i *interpreter) term() int {
 	var result int
-	result = factor(i.cur())
+	result = i.factor(i.cur())
 	for token := i.next(); token != nil && isMult(token.typ) == true ; {
 		switch token.typ {
 		case MULT:
-			result = result * factor(i.next())
+			result = result * i.factor(i.next())
 		case DIV:
-			result = result / factor(i.next())
+			result = result / i.factor(i.next())
 		}
 		token = i.next()
 	}
 	return result
 }
 
-func (i *interpreter) expre() {
+func (i *interpreter) expre() int {
 	result := i.term()
 	for ; i.cur() != nil && i.cur().typ != EOF; {
 		switch i.cur().typ {
@@ -174,16 +180,19 @@ func (i *interpreter) expre() {
 		case PLUS:
 			i.next()
 			result = result + i.term()
+		case RIGHT:
+			return result
 		default:
 			fmt.Fprintf(os.Stderr, "Error parsing need + or - has %d\n", i.cur().typ)
 			os.Exit(-1)
 		}
 	}
-	fmt.Println("Result := ", result)
+	return result
 }
 
 func (i *interpreter) parse() {
-	i.expre()
+	result := i.expre()
+	fmt.Println("Result := ", result)
 }
 
 func main() {
