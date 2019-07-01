@@ -140,16 +140,28 @@ func isMult(typ int) bool {
 	factor : integer | ( expres )
 */
 
+func (i *interpreter) digest(typ int) {
+	if typ == i.cur().typ {
+		fmt.Println("Valid := ", i.cur().typ, i.cur().value)
+		i.next()
+	} else {
+		fmt.Fprintf(os.Stderr, "Syntax Error has %d needed %d for %s\n", i.cur().typ, typ, i.cur().value)
+		os.Exit(-1)
+	}
+}
+
 func (i *interpreter) factor(cur *token) int {
 	if cur.typ == INTEGER {
+		i.digest(INTEGER)
 		value, _ := strconv.Atoi(cur.value)
 		return value
 	} else if cur.typ == LEFT {
-		i.next()
+		i.digest(LEFT)
 		result := i.expre()
+		i.digest(RIGHT)
 		return result
 	} else {
-		fmt.Fprintf(os.Stderr, "Syntax Error has %d\n", i.cur().typ)
+		fmt.Fprintf(os.Stderr, "Syntax Error\n")
 		os.Exit(-1)
 	}
 	return 0
@@ -158,33 +170,29 @@ func (i *interpreter) factor(cur *token) int {
 func (i *interpreter) term() int {
 	var result int
 	result = i.factor(i.cur())
-	for token := i.next(); token != nil && isMult(token.typ) == true ; {
-		switch token.typ {
+	for ; i.cur() != nil && isMult(i.cur().typ) == true ; {
+		switch i.cur().typ {
 		case MULT:
-			result = result * i.factor(i.next())
+			i.digest(MULT)
+			result = result * i.factor(i.cur())
 		case DIV:
-			result = result / i.factor(i.next())
+			i.digest(DIV)
+			result = result / i.factor(i.cur())
 		}
-		token = i.next()
 	}
 	return result
 }
 
 func (i *interpreter) expre() int {
 	result := i.term()
-	for ; i.cur() != nil && i.cur().typ != EOF; {
+	for ; i.cur() != nil && i.cur().typ != EOF && isPlus(i.cur().typ); {
 		switch i.cur().typ {
 		case MINUS:
-			i.next()
+			i.digest(MINUS)
 			result = result - i.term()
 		case PLUS:
-			i.next()
+			i.digest(PLUS)
 			result = result + i.term()
-		case RIGHT:
-			return result
-		default:
-			fmt.Fprintf(os.Stderr, "Error parsing need + or - has %d\n", i.cur().typ)
-			os.Exit(-1)
 		}
 	}
 	return result
@@ -217,4 +225,7 @@ func main() {
 	}
 	interpreter := interpreter{0, lexemes}
 	interpreter.parse()
+	if interpreter.cur().typ != EOF {
+		fmt.Fprintln(os.Stderr, "Syntax Error: Unexpected Token", interpreter.cur().value)
+	}
 }
