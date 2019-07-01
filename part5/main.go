@@ -29,15 +29,25 @@ func (t *token) String() string {
 	return fmt.Sprintf("type %d, value [%c]", t.typ, t.value)
 }
 
-func next() func(t []*token) *token {
-	index := -1
-	return func(t []*token) *token {
-		index++
-		if len(t) <= index {
-			return nil
-		} else {
-			return t[index]
-		}
+type interpreter struct {
+	index int
+	tok []*token
+}
+
+func (i *interpreter) next() *token {
+	i.index++
+	if i.index < len(i.tok) {
+		return i.tok[i.index]
+	} else {
+		return nil
+	}
+}
+
+func (i *interpreter) cur() *token {
+	if i.index < len(i.tok) {
+		return i.tok[i.index]
+	} else {
+		return nil
 	}
 }
 
@@ -106,8 +116,15 @@ func (i *lexer) get_next_token() (*token, error) {
 	}
 }
 
-func isRight(typ int) bool {
-	if typ == MINUS || typ == PLUS || typ == MULT || typ == DIV {
+func isPlus(typ int) bool {
+	if typ == MINUS || typ == PLUS {
+		return true
+	}
+	return false
+}
+
+func isMult(typ int) bool {
+	if typ == MULT || typ == DIV {
 		return true
 	}
 	return false
@@ -132,34 +149,41 @@ func factor(cur *token) int {
 	return integer(cur, INTEGER)
 }
 
-func expre(lexems []*token) {
+func (i *interpreter) term() int {
 	var result int
-	test := next()
-	result = factor(test(lexems))
-	for token := test(lexems); token != nil ; token = test(lexems){
-		if isRight(token.typ) == true {
-			switch token.typ {
-			case MULT:
-				result = result * factor(test(lexems))
-			case DIV:
-				result = result / factor(test(lexems))
-			case MINUS:
-				result = result - factor(test(lexems))
-			case PLUS:
-				result = result + factor(test(lexems))
-			}
-		} else if token.typ == EOF {
-				break
-		} else {
-			fmt.Println("Error parsing need Operator has", token.typ)
+	result = factor(i.cur())
+	for token := i.next(); token != nil && isMult(token.typ) == true ; {
+		switch token.typ {
+		case MULT:
+			result = result * factor(i.next())
+		case DIV:
+			result = result / factor(i.next())
+		}
+		token = i.next()
+	}
+	return result
+}
+
+func (i *interpreter) expre() {
+	result := i.term()
+	for ; i.cur() != nil && i.cur().typ != EOF; {
+		switch i.cur().typ {
+		case MINUS:
+			i.next()
+			result = result - i.term()
+		case PLUS:
+			i.next()
+			result = result + i.term()
+		default:
+			fmt.Fprintf(os.Stderr, "Error parsing need + or - has %d\n", i.cur().typ)
 			os.Exit(-1)
 		}
 	}
 	fmt.Println("Result := ", result)
 }
 
-func parse(lexems []*token) {
-	expre(lexems)
+func (i *interpreter) parse() {
+	i.expre()
 }
 
 func main() {
@@ -182,5 +206,6 @@ func main() {
 			break
 		}
 	}
-	parse(lexemes)
+	interpreter := interpreter{0, lexemes}
+	interpreter.parse()
 }
