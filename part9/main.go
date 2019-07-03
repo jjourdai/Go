@@ -26,7 +26,7 @@
            | LPAREN expr RPAREN
            | variable
 
-    variable: ID
+    variable: WORD
 */
 
 package main
@@ -37,6 +37,7 @@ import (
 	"flag"
 	"strings"
 	"strconv"
+	"unicode"
 	"io/ioutil"
 )
 
@@ -78,7 +79,7 @@ func init_lex() func(key string) int {
 		"*" : MUL,
 		"(" : LPAR,
 		")" : RPAR,
-		";" : RPAR,
+		";" : SEMI,
 		"." : DOT,
 		"\n" : EOF,
 	}
@@ -118,7 +119,7 @@ func lexer(expr string) []lexemes {
 	length := len(expr)
 	for index := 0 ; index < length; index++ {
 		switch {
-		case expr[index] == ' ' || expr[index] == '\n':
+		case unicode.IsSpace(rune(expr[index])):
 			store_new_token(&tokens, &new_token, &slice)
 			continue
 		case expr[index] >= '0' && expr[index] <= '9':
@@ -204,6 +205,7 @@ func (i *interpreter) digest(needed int) {
 	} else {
 		fmt.Fprintf(os.Stderr, "Syntax Error need %d has %d for %s\n",
 			needed, i.Cur().ttype, i.Cur().tvalue)
+		os.Exit(-1)
 	}
 }
 
@@ -213,6 +215,9 @@ func (i *interpreter) factor() *Node {
 	switch token.ttype {
 	case INTEGER:
 		i.digest(INTEGER)
+		node = &Node{nil, token, nil}
+	case WORD:
+		i.digest(WORD)
 		node = &Node{nil, token, nil}
 	case LPAR:
 		i.digest(LPAR)
@@ -308,10 +313,58 @@ func run(node *Node) int {
 	return result
 }
 
+func (i *interpreter) assignment_statement() *Node {
+	token := i.Cur()
+	i.digest(WORD)
+	variable := &Node{nil, i.Cur(), nil}
+	token = i.Cur()
+	i.digest(ASSIGN)
+	return &Node{variable, token, i.expr()}
+}
+
+func (i *interpreter) statement() *Node {
+	ttype := i.Cur().ttype
+	var node *Node
+	if ttype == BEGIN {
+		node = i.compound_statement()
+	} else if ttype == WORD {
+		node = i.assignment_statement()
+	} else {
+		return nil
+	}
+	return node
+}
+
+func (i *interpreter) statement_list () *Node {
+	node := i.statement()
+	for ; i.Cur().ttype == SEMI ; {
+		token := i.Cur()
+		i.digest(SEMI)
+		node = &Node{node, token, i.statement_list()} ///dwakljdawljdklawjd
+	}
+	return node
+}
+
+func (i *interpreter) compound_statement () *Node {
+	i.digest(BEGIN)
+	node := i.statement_list()
+	i.digest(END)
+	return node
+}
+
+func (i *interpreter) program() *Node {
+	node := i.compound_statement()
+	i.digest(DOT)
+	return node
+}
+
 func (i *interpreter) Parse() {
-	node := i.expr()
+	//node := i.expr()
+	node := i.program()
+	fmt.Println(node)
 	if i.Cur().ttype == EOF {
-		fmt.Println("Result :=", run(node))
+		fmt.Println("FINISHED")
+	//	fmt.Println("Result :=", run(node))
 	} else {
 		fmt.Fprintf(os.Stderr, "Unexpected token %d '%s'\n", i.Cur().ttype, i.Cur().tvalue)
 		os.Exit(-1)

@@ -23,5 +23,5 @@ factor : PLUS factor
        | LPAREN expr RPAREN
        | variable
 
-variable: ID
+variable: WORD
 
