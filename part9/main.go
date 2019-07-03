@@ -54,13 +54,14 @@ const (
 	END = 11
 	SEMI = 12
 	ASSIGN = 13
-	EOL = 14
-	EOF = 15
+	WORD = 14
+	EOL = 15
+	EOF = 16
 )
 
 type lexemes struct {
 	ttype int
-	tvalue []string
+	tvalue string
 }
 
 
@@ -78,10 +79,34 @@ func init_lex() func(key string) int {
 		"(" : LPAR,
 		")" : RPAR,
 		";" : RPAR,
+		"." : DOT,
 		"\n" : EOF,
 	}
 	return func(key string) int {
 		return lex[key]
+	}
+}
+
+func reserved_keyword() func(key string) int {
+	var keyword = map[string]int {
+		"BEGIN" : BEGIN,
+		"END" : END,
+	}
+	return func(key string) int {
+		return keyword[key]
+	}
+}
+
+func store_new_token(tokens *[]lexemes, new_token **lexemes, slice *[]string) {
+	keyword := reserved_keyword()
+	if *new_token != nil {
+		(*new_token).tvalue = strings.Join(*slice, "")
+		if kword := keyword((*new_token).tvalue); kword != 0 {
+			(*new_token).ttype = kword
+		}
+		*tokens = append(*tokens, **new_token)
+		*new_token = nil
+		*slice = nil
 	}
 }
 
@@ -90,66 +115,53 @@ func lexer(expr string) []lexemes {
 	var tokens []lexemes
 	var new_token *lexemes
 	var slice []string
-	for _, value := range expr {
+	length := len(expr)
+	for index := 0 ; index < length; index++ {
 		switch {
-		case value == ' ':
-			if new_token != nil {
-				new_token.tvalue = slice
-				tokens = append(tokens, *new_token)
-				new_token = nil
-				slice = nil
-			}
+		case expr[index] == ' ' || expr[index] == '\n':
+			store_new_token(&tokens, &new_token, &slice)
 			continue
-		case value >= '0' && value <= '9':
+		case expr[index] >= '0' && expr[index] <= '9':
 			if new_token == nil {
-				new_token = &lexemes{INTEGER, make([]string, 10)}
+				new_token = &lexemes{INTEGER, ""}
 			}
-			slice = append(slice, string(value))
+			slice = append(slice, string(expr[index]))
+		case expr[index] >= 65 && expr[index] <= 90 || expr[index] >= 97 && expr[index] <= 122:
+			if new_token != nil && new_token.ttype != WORD {
+				store_new_token(&tokens, &new_token, &slice)
+			}
+			if new_token == nil {
+				new_token = &lexemes{WORD, ""}
+			}
+			slice = append(slice, string(expr[index]))
+		case expr[index] == ':' && index < length - 1 && expr[index + 1] == '=':
+			store_new_token(&tokens, &new_token, &slice)
+			tokens = append(tokens, lexemes{ASSIGN, ":="})
+			index++
 		default:
-			if new_token != nil {
-				new_token.tvalue = slice
-				tokens = append(tokens, *new_token)
-				new_token = nil
-				slice = nil
-			}
-			new_val := lex(string(value))
-			tokens = append(tokens, lexemes{new_val, []string{string(value)}})
+			store_new_token(&tokens, &new_token, &slice)
+			new_val := lex(string(expr[index]))
+			tokens = append(tokens, lexemes{new_val, string(expr[index])})
 			if new_val == 0 {
-				fmt.Fprintf(os.Stderr, "Lexer Error: unexpected character '%c'\n", value)
+				fmt.Fprintf(os.Stderr, "Lexer Error: unexpected character '%c'\n", expr[index])
 				os.Exit(-1)
 			}
 		}
-//		fmt.Printf("index [%d] = '%c'\n", index, value)
+//		fmt.Printf("index [%d] = '%c'\n", index, expr[index])
 	}
-	if new_token != nil {
-		new_token.tvalue = slice
-		tokens = append(tokens, *new_token)
-		new_token = nil
-		slice = nil
-	}
-
-	tokens = append(tokens, lexemes{EOF, []string{"EOF"}})
+	store_new_token(&tokens, &new_token, &slice)
+	tokens = append(tokens, lexemes{EOF, "EOF"})
 	return tokens
 }
 
-func prior1(current_token []string) bool {
+func prior1(current_token string) bool {
 	available_character := "*/%"
-	for _, value := range current_token {
-		if strings.Contains(available_character, value) {
-			return true
-		}
-	}
-	return false
+	return strings.Contains(available_character, current_token)
 }
 
-func prior2(current_token []string) bool {
+func prior2(current_token string) bool {
 	available_character := "+-"
-	for _, value := range current_token {
-		if strings.Contains(available_character, value) {
-			return true
-		}
-	}
-	return false
+	return strings.Contains(available_character, current_token)
 }
 
 type interpreter struct {
@@ -291,7 +303,7 @@ func run(node *Node) int {
 		case MOD:
 			result = left % right
 		case INTEGER:
-			result, _ = strconv.Atoi(strings.Join(node.token.tvalue," "))
+			result, _ = strconv.Atoi(node.token.tvalue)
 	}
 	return result
 }
@@ -306,9 +318,32 @@ func (i *interpreter) Parse() {
 	}
 }
 
+func reverse_lex() func(key int) string {
+	var lex = map[int]string {
+		PLUS : "PLUS",
+		MINUS : "MINUS",
+		MUL : "MUL",
+		DIV : "DIV",
+		MOD : "MOD",
+		LPAR : "LPAR",
+		RPAR : "RPAR",
+		INTEGER : "INTEGER",
+		DOT : "DOT",
+		BEGIN : "BEGIN",
+		END : "END",
+		SEMI : "SEM",
+		ASSIGN : "ASSIGN",
+		WORD : "WORD",
+		EOL : "EOL",
+		EOF : "EOF",
+	}
+	return func(key int) string {
+		return lex[key]
+	}
+}
 func main() {
 	if len(os.Args) != 2 {
-		fmt.Fprintln(os.Stderr, "Need 2 parameters")
+		fmt.Fprintln(os.Stderr, "Need 1 parameter")
 		os.Exit(-1)
 	}
 	flag.Parse()
@@ -317,11 +352,12 @@ func main() {
 		fmt.Fprintln(os.Stderr, data)
 	}
 	tokens := lexer(string(data))
-/*
+
+	reverse_lex := reverse_lex()
 	for i, j := range tokens {
-		fmt.Println("Token :=", i, j)
+		fmt.Printf("Token[%d] := {%s} '%s'\n", i, reverse_lex(j.ttype), j.tvalue)
 	}
-*/
+
 	interpreter := interpreter{0, len(tokens), tokens}
 	interpreter.Parse()
 }
