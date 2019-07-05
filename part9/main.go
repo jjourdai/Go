@@ -60,11 +60,14 @@ const (
 	EOF = 16
 )
 
+/*
+	Interpreter
+*/
+
 type lexemes struct {
 	ttype int
 	tvalue string
 }
-
 
 func (n *lexemes) String() string {
 	return fmt.Sprintf("type [%d] value '%s'", n.ttype, n.tvalue)
@@ -74,7 +77,7 @@ func init_lex() func(key string) int {
 	var lex = map[string]int {
 		"+" : PLUS,
 		"-" : MINUS,
-		"/" : DIV,
+//		"/" : DIV,
 		"%" : MOD,
 		"*" : MUL,
 		"(" : LPAR,
@@ -92,6 +95,7 @@ func reserved_keyword() func(key string) int {
 	var keyword = map[string]int {
 		"BEGIN" : BEGIN,
 		"END" : END,
+		"DIV" : DIV,
 	}
 	return func(key string) int {
 		return keyword[key]
@@ -101,7 +105,7 @@ func reserved_keyword() func(key string) int {
 func store_new_token(tokens *[]lexemes, new_token **lexemes, slice *[]string) {
 	keyword := reserved_keyword()
 	if *new_token != nil {
-		(*new_token).tvalue = strings.Join(*slice, "")
+		(*new_token).tvalue = strings.ToUpper(strings.Join(*slice, ""))
 		if kword := keyword((*new_token).tvalue); kword != 0 {
 			(*new_token).ttype = kword
 		}
@@ -127,7 +131,7 @@ func lexer(expr string) []lexemes {
 				new_token = &lexemes{INTEGER, ""}
 			}
 			slice = append(slice, string(expr[index]))
-		case expr[index] >= 65 && expr[index] <= 90 || expr[index] >= 97 && expr[index] <= 122:
+		case expr[index] >= 65 && expr[index] <= 90 || expr[index] >= 97 && expr[index] <= 122 || expr[index] == '_':
 			if new_token != nil && new_token.ttype != WORD {
 				store_new_token(&tokens, &new_token, &slice)
 			}
@@ -155,9 +159,11 @@ func lexer(expr string) []lexemes {
 	return tokens
 }
 
-func prior1(current_token string) bool {
-	available_character := "*/%"
-	return strings.Contains(available_character, current_token)
+func prior1(current_token int) bool {
+	if current_token == MOD || current_token == DIV || current_token == MUL {
+		return true
+	}
+	return false
 }
 
 func prior2(current_token string) bool {
@@ -165,10 +171,73 @@ func prior2(current_token string) bool {
 	return strings.Contains(available_character, current_token)
 }
 
+/*
+	Interpreter
+*/
+
 type interpreter struct {
 	index int
 	length int
 	tokens []lexemes
+}
+
+type Element interface {
+	Resolve()
+}
+
+type Compound struct {
+	elem []Element
+	scope map[string]int
+}
+
+func (c Compound) Resolve() {
+	for _, elem := range c.elem {
+		if elem != nil {
+			switch v := elem.(type) {
+			case *Compound:
+				v.Resolve()
+			case *Var:
+				fmt.Println("Type Var")
+			case *Assign:
+				fmt.Println("Type Assign")
+				var_name := v.variable.token.tvalue
+				c.scope[var_name] = run(v.expr, c)
+				fmt.Println("result :=", c.scope[var_name])
+			case *Node:
+				fmt.Println("Type Node")
+			default:
+				fmt.Println("Type unknown")
+			}
+		}
+	}
+}
+
+type Elem_list struct {
+	elem []Element
+}
+
+func (c Elem_list) Resolve() {
+
+}
+
+
+type Var struct {
+	token *lexemes
+}
+
+func (c *Var) Resolve() {
+}
+
+type Assign struct {
+	variable Var
+	token *lexemes
+	expr *Node
+}
+
+func (a *Assign) Resolve() {
+	//var_name := a.variable.token.tvalue
+	//GLOBAL_SCOPE[var_name] = run(a.expr)
+	//fmt.Println("dwa;ljdlawkjdalwjdakw")
 }
 
 type Node struct {
@@ -177,8 +246,7 @@ type Node struct {
 	right *Node
 }
 
-type Ast struct {
-	root *Node
+func (n *Node) Resolve() {
 }
 
 func (i *interpreter) Cur() *lexemes {
@@ -238,7 +306,7 @@ func (i *interpreter) factor() *Node {
 
 func (i *interpreter) term() *Node {
 	node := i.factor()
-	for ; prior1(i.Cur().tvalue) == true; {
+	for ; prior1(i.Cur().ttype) == true; {
 		token := i.Cur()
 		switch token.ttype {
 		case MUL:
@@ -268,35 +336,68 @@ func (i *interpreter) expr() *Node {
 	return node
 }
 
-func rpn_notation(node *Node) {
-	if node.left != nil {
-		rpn_notation(node.left)
-	}
-	if node.right != nil {
-		rpn_notation(node.right)
-	}
-	fmt.Print(node.token.tvalue, " ")
+func (i *interpreter) assignment_statement() Element {
+	token := i.Cur()
+	i.digest(WORD)
+	variable := Var{token}
+	token = i.Cur()
+	i.digest(ASSIGN)
+	return &Assign{variable, token, i.expr()}
 }
 
-func lisp_notation(node *Node) {
-	fmt.Print(node.token.tvalue, " ")
-	if node.left != nil {
-		lisp_notation(node.left)
+func (i *interpreter) statement() Element {
+	ttype := i.Cur().ttype
+	var node Element
+	if ttype == BEGIN {
+		node = i.compound_statement()
+	} else if ttype == WORD {
+		node = i.assignment_statement()
+	} else {
+		return nil
 	}
-	if node.right != nil {
-		lisp_notation(node.right)
-	}
+	return node
 }
 
-func run(node *Node) int {
+func (i *interpreter) statement_list() Elem_list {
+	node := i.statement()
+	list := Elem_list{}
+	list.elem = append(list.elem, node)
+	for ; i.Cur().ttype == SEMI ; {
+		i.digest(SEMI)
+		list.elem = append(list.elem, i.statement())
+	}
+	return list
+}
+
+func (i *interpreter) compound_statement() Element {
+	i.digest(BEGIN)
+	node := i.statement_list()
+	i.digest(END)
+	root := Compound{node.elem, make(map[string]int)}
+	return &root
+}
+
+func (i *interpreter) program() Element {
+	node := i.compound_statement()
+	i.digest(DOT)
+	return node
+}
+
+func run(elem Element, c Compound) int {
 	var result, left, right int
-	if node.left != nil {
-		left = run(node.left)
+	var test *Node
+	test, ok := elem.(*Node)
+	if ok == false {
+		fmt.Fprintln(os.Stderr, "need node", ok)
+		os.Exit(-1)
 	}
-	if node.right != nil {
-		right = run(node.right)
+	if test.left != nil {
+		left = run(test.left, c)
 	}
-	switch node.token.ttype {
+	if test.right != nil {
+		right = run(test.right, c)
+	}
+	switch test.token.ttype {
 		case MINUS:
 			result = left - right
 		case PLUS:
@@ -308,63 +409,24 @@ func run(node *Node) int {
 		case MOD:
 			result = left % right
 		case INTEGER:
-			result, _ = strconv.Atoi(node.token.tvalue)
+			result, _ = strconv.Atoi(test.token.tvalue)
+		case WORD:
+			var_name := test.token.tvalue
+			value, ok := c.scope[var_name]
+			if ok == true {
+				result = value
+			} else {
+				fmt.Fprintf(os.Stderr, "Semantic Error: %s undeclared \n", var_name)
+			}
 	}
 	return result
 }
 
-func (i *interpreter) assignment_statement() *Node {
-	token := i.Cur()
-	i.digest(WORD)
-	variable := &Node{nil, i.Cur(), nil}
-	token = i.Cur()
-	i.digest(ASSIGN)
-	return &Node{variable, token, i.expr()}
-}
-
-func (i *interpreter) statement() *Node {
-	ttype := i.Cur().ttype
-	var node *Node
-	if ttype == BEGIN {
-		node = i.compound_statement()
-	} else if ttype == WORD {
-		node = i.assignment_statement()
-	} else {
-		return nil
-	}
-	return node
-}
-
-func (i *interpreter) statement_list () *Node {
-	node := i.statement()
-	for ; i.Cur().ttype == SEMI ; {
-		token := i.Cur()
-		i.digest(SEMI)
-		node = &Node{node, token, i.statement_list()} ///dwakljdawljdklawjd
-	}
-	return node
-}
-
-func (i *interpreter) compound_statement () *Node {
-	i.digest(BEGIN)
-	node := i.statement_list()
-	i.digest(END)
-	return node
-}
-
-func (i *interpreter) program() *Node {
-	node := i.compound_statement()
-	i.digest(DOT)
-	return node
-}
-
 func (i *interpreter) Parse() {
-	//node := i.expr()
 	node := i.program()
-	fmt.Println(node)
 	if i.Cur().ttype == EOF {
-		fmt.Println("FINISHED")
-	//	fmt.Println("Result :=", run(node))
+		fmt.Println("Parsing FINISHED")
+		node.Resolve()
 	} else {
 		fmt.Fprintf(os.Stderr, "Unexpected token %d '%s'\n", i.Cur().ttype, i.Cur().tvalue)
 		os.Exit(-1)
@@ -394,6 +456,7 @@ func reverse_lex() func(key int) string {
 		return lex[key]
 	}
 }
+
 func main() {
 	if len(os.Args) != 2 {
 		fmt.Fprintln(os.Stderr, "Need 1 parameter")
