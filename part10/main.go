@@ -18,7 +18,6 @@ const (
 	MOD = 5
 	LPAR = 6
 	RPAR = 7
-	NUMBER = 8
 	DOT = 9
 	BEGIN = 10
 	END = 11
@@ -106,7 +105,7 @@ func tokenize(expr string) []lexemes {
 			continue
 		case expr[index] >= '0' && expr[index] <= '9':
 			if new_token == nil {
-				new_token = &lexemes{NUMBER, ""}
+				new_token = &lexemes{INTEGER, ""}
 			}
 			new_token.tvalue += string(expr[index])
 		case expr[index] >= 65 && expr[index] <= 90 || expr[index] >= 97 && expr[index] <= 122 || expr[index] == '_':
@@ -121,6 +120,9 @@ func tokenize(expr string) []lexemes {
 			store_new_token(&tokens, &new_token)
 			tokens = append(tokens, lexemes{ASSIGN, ":="})
 			index++
+		case expr[index] == '.' && new_token.ttype == INTEGER:
+			new_token.tvalue += string(expr[index])
+			new_token.ttype = REAL
 		default:
 			store_new_token(&tokens, &new_token)
 			new_val := lex(string(expr[index]))
@@ -170,13 +172,15 @@ type Element interface {
 
 type Compound struct {
 	elem []Element
-	scope map[string]int
+	scope map[string]int64
 }
 
 func (c Compound) Resolve() {
 	for _, elem := range c.elem {
 		if elem != nil {
 			switch v := elem.(type) {
+			case *Block:
+				fmt.Println("Type Block")
 			case *Compound:
 				v.Resolve()
 			case *Var:
@@ -203,12 +207,35 @@ func (c Elem_list) Resolve() {
 
 }
 
+type Spec int
+func (c Spec) Resolve() {
+}
+
+type VarList map[string]*Var
+
+func (c *VarList) Resolve() {
+}
 
 type Var struct {
 	token *lexemes
+	spec *Spec
 }
 
 func (c *Var) Resolve() {
+}
+
+type Block struct {
+	varlist *VarList
+	compound Element
+}
+
+func (b *Block) Resolve() {
+	switch b.compound.(type) {
+		case *Compound:
+			b.compound.Resolve()
+		default:
+			fmt.Println("Error")
+	}
 }
 
 type Assign struct {
@@ -251,8 +278,8 @@ func (r *rules) digest(needed int) {
 		fmt.Printf("Digest := [%d] '%s'\n", r.lexer.Cur().ttype, r.lexer.Cur().tvalue)
 		r.lexer.Next()
 	} else {
-		fmt.Fprintf(os.Stderr, "Syntax Error need %d has %d for %s\n",
-			needed, r.lexer.Cur().ttype, r.lexer.Cur().tvalue)
+		fmt.Fprintf(os.Stderr, "Syntax Error waiting for [%s] has [%s] for %s\n",
+			reverse_lex[needed], reverse_lex[r.lexer.Cur().ttype], r.lexer.Cur().tvalue)
 		os.Exit(-1)
 	}
 }
@@ -261,8 +288,11 @@ func (r *rules) factor() *Node {
 	var node *Node
 	token := r.lexer.Cur()
 	switch token.ttype {
-	case NUMBER:
-		r.digest(NUMBER)
+	case INTEGER:
+		r.digest(INTEGER)
+		node = &Node{nil, token, nil}
+	case REAL:
+		r.digest(REAL)
 		node = &Node{nil, token, nil}
 	case WORD:
 		r.digest(WORD)
@@ -319,7 +349,7 @@ func (r *rules) expr() *Node {
 func (r *rules) variable() Var {
 	token := r.lexer.Cur()
 	r.digest(WORD)
-	return Var{token}
+	return Var{token, nil}
 }
 
 func (r *rules) assignment_statement() Element {
@@ -357,24 +387,74 @@ func (r *rules) compound_statement() Element {
 	r.digest(BEGIN)
 	node := r.statement_list()
 	r.digest(END)
-	root := Compound{node.elem, make(map[string]int)}
+	root := Compound{node.elem, make(map[string]int64)}
 	return &root
+}
+
+func (r *rules) type_spec() Element {
+	token := r.lexer.Cur()
+	switch token.ttype {
+	case INTEGER:
+		r.digest(INTEGER)
+		return Spec(INTEGER)
+	case REAL:
+		r.digest(REAL)
+		return Spec(REAL)
+	default:
+		fmt.Fprintf(os.Stderr, "Semantic Error: %s unknown type\n", token.tvalue)
+		os.Exit(-1)
+	}
+	return nil
+}
+
+func (r *rules) variable_declaration() Elem_list {
+	variable := r.variable()
+	list := Elem_list{}
+	list.elem = append(list.elem, &variable)
+	for ; r.lexer.Cur().ttype == COMMA ; {
+		r.digest(COMMA)
+		variable = r.variable()
+		list.elem = append(list.elem, &variable)
+	}
+	r.digest(COLON)
+	type_spec := r.type_spec()
+	list.elem = append(list.elem, type_spec)
+	return list
+}
+
+func (r *rules) declaration() *VarList {
+	r.digest(VAR)
+	varlist := make(VarList)
+	for ; r.lexer.Cur().ttype == WORD; {
+		list := r.variable_declaration()
+		length := len(list.elem)
+		index := 0
+		type_spec, _ := list.elem[index].(Spec)
+		for ; index > length - 1; index++ {
+				variable, _ := list.elem[index].(*Var)
+						varlist[variable.token.tvalue] = variable
+						variable.spec = &type_spec
+		}
+		r.digest(SEMI)
+	}
+	return &varlist
+}
+
+func (r *rules) block() Element {
+	return &Block{r.declaration(), r.compound_statement()}
 }
 
 func (r *rules) program() Element {
 	r.digest(PROGRAM)
-//	variable := r.variable()
+	r.variable()
 	r.digest(SEMI)
-
-	node := r.compound_statement()
+	node := r.block()
 	r.digest(DOT)
 	return node
 }
 
-
-
-func run(elem Element, c Compound) int {
-	var result, left, right int
+func run(elem Element, c Compound) int64 {
+	var result, left, right int64
 	var test *Node
 	test, ok := elem.(*Node)
 	if ok == false {
@@ -398,8 +478,10 @@ func run(elem Element, c Compound) int {
 			result = left * right
 		case MOD:
 			result = left % right
-		case NUMBER:
-			result, _ = strconv.Atoi(test.token.tvalue)
+		case INTEGER:
+			result, _ = strconv.ParseInt(test.token.tvalue, 10, 64)
+//		case REAL:
+//			result, _ = strconv.ParseFloat(test.token.tvalue, 64)
 		case WORD:
 			var_name := test.token.tvalue
 			value, ok := c.scope[var_name]
@@ -423,8 +505,7 @@ func (r *rules) Parse() {
 	}
 }
 
-func reverse_lex() func(key int) string {
-	var lex = map[int]string {
+var reverse_lex = map[int]string {
 		PLUS : "PLUS",
 		MINUS : "MINUS",
 		MUL : "MUL",
@@ -432,11 +513,10 @@ func reverse_lex() func(key int) string {
 		MOD : "MOD",
 		LPAR : "LPAR",
 		RPAR : "RPAR",
-		NUMBER : "NUMBER",
 		DOT : "DOT",
 		BEGIN : "BEGIN",
 		END : "END",
-		SEMI : "SEM",
+		SEMI : "SEMI",
 		ASSIGN : "ASSIGN",
 		WORD : "WORD",
 		EOL : "EOL",
@@ -447,10 +527,6 @@ func reverse_lex() func(key int) string {
 		COLON : "COLON",
 		COMMA : "COMMA",
 		PROGRAM : "PROGRAM",
-	}
-	return func(key int) string {
-		return lex[key]
-	}
 }
 
 func main() {
@@ -465,9 +541,8 @@ func main() {
 	}
 	tokens := tokenize(string(data))
 
-	reverse_lex := reverse_lex()
 	for i, j := range tokens {
-		fmt.Printf("Token[%d] := {%s} '%s'\n", i, reverse_lex(j.ttype), j.tvalue)
+		fmt.Printf("Token[%d] := {%s} '%s'\n", i, reverse_lex[j.ttype], j.tvalue)
 	}
 
 	rules := rules{lexer{0, len(tokens), tokens}}

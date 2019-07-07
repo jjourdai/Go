@@ -4,7 +4,7 @@ block : declarations compound_statement
 
 declaration : VAR (variable_declaration SEMI)+ | empty
 
-variable_declaration : WORD (COMMA WORD)* COLON type_spec
+variable_declaration : variable (COMMA WORD)* COLON type_spec
 
 type_spec : INTEGER | REAL
 
