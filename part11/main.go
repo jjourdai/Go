@@ -5,7 +5,7 @@ import (
 	"os"
 	"flag"
 	"strings"
-//	"strconv"
+	"strconv"
 	"unicode"
 	"io/ioutil"
 )
@@ -137,11 +137,11 @@ type Spec struct {
 }
 
 type Number struct {
-	tokens *lexemes
+	token *lexemes
 }
 
 type Op struct {
-	tokens *lexemes
+	token *lexemes
 }
 
 var global_varlist *VarList = nil
@@ -489,85 +489,81 @@ for index, value := range *node.varlist {
 	Interpreter
 */
 
-func (c Compound) Resolve() {
-	for _, elem := range c.elem {
-		if elem != nil {
-			switch v := elem.(type) {
-			case *Block:
-				fmt.Println("Type Block")
-			case *Compound:
-				v.Resolve()
-			case *Var:
-				fmt.Println("Type Var")
-			case *Assign:
-				fmt.Println("Type Assign")
-				var_name := v.variable.token.tstring
-				_, ok := (*global_varlist)[var_name]
-				if ok == true {
-					(*global_scope)[var_name] = v.variable
-					(*global_scope)[var_name].value = run(v.expr)
-				} else {
-					fmt.Fprintf(os.Stderr, "Semantic Error: %s undeclared \n", var_name)
-					os.Exit(-1)
-				}
-				run(v.expr)
-			case *Node:
-				fmt.Println("Type Node")
-			default:
-				fmt.Println("Type unknown")
-			}
+func interpret_tree(node interface{}) float64 {
+	var result float64
+	switch v := node.(type) {
+	case *Block:
+		fmt.Println("Type Block")
+		interpret_tree(v.compound)
+	case *Compound:
+		fmt.Println("Type Compound")
+		for _, elem := range v.elem {
+			interpret_tree(elem)
 		}
-	}
-}
-
-func (b *Block) Resolve() {
-	switch l := b.compound.(type) {
-		case *Compound:
-			l.Resolve()
+	case *VarDeclaration:
+		fmt.Println("Type VarDeclaration")
+	case *Var:
+		fmt.Println("Type Var")
+		result = (*global_scope)[v.token.tstring].value
+		return result
+	case *Assign:
+		fmt.Println("Type Assign")
+		var_name := v.variable.token.tstring
+		(*global_scope)[var_name] = v.variable
+		(*global_scope)[var_name].value = interpret_tree(v.expr)
+	case *Node:
+		fmt.Println("Type Node")
+		var result, left, right float64
+		var test *Node
+		test, ok := node.(*Node)
+		if ok == false {
+			fmt.Fprintln(os.Stderr, "need node", ok)
+			os.Exit(-1)
+		}
+		if test.left != nil {
+			left = interpret_tree(test.left)
+		}
+		if test.right != nil {
+			right = interpret_tree(test.right)
+		}
+		switch cur := test.token.(type) {
+		case *Op:
+			switch cur.token.ttype {
+			case MINUS:
+				result = left - right
+			case PLUS:
+				result = left + right
+			case INTEGER_DIV:
+				result = left / right
+			case FLOAT_DIV:
+				result = left / right
+			case MUL:
+				result = left * right
+			case ID:
+				var_name := cur.token.tstring
+				result = (*global_scope)[var_name].value
+			}
 		default:
-			fmt.Println("Error")
-	}
-}
-
-func run(elem interface{}) float64 {
-	/*
-	var result, left, right float64
-	var test *Node
-	test, ok := elem.(*Node)
-	if ok == false {
-		fmt.Fprintln(os.Stderr, "need node", ok)
-		os.Exit(-1)
-	}
-	if test.left != nil {
-		left = run(test.left)
-	}
-	if test.right != nil {
-		right = run(test.right)
-	}
-	switch test.token.ttype {
-		case MINUS:
-			result = left - right
-		case PLUS:
-			result = left + right
-		case INTEGER_DIV:
-			result = left / right
-		case FLOAT_DIV:
-			result = left / right
-		case MUL:
-			result = left * right
-//		case MOD:
-//			result = left % right
+			result = interpret_tree(cur)
+		}
+		return result
+	case *Op:
+		fmt.Println("Type Op")
+	case *Number:
+		fmt.Println("Type Number")
+		switch v.token.ttype {
 		case INTEGER_CONST:
-			tmp, _ := strconv.ParseInt(test.token.tstring, 10, 64)
+			tmp, _ := strconv.ParseInt(v.token.tstring, 10, 64)
 			result = float64(tmp)
 		case REAL_CONST:
-			result, _ = strconv.ParseFloat(test.token.tstring, 64)
-		case ID:
-			var_name := test.token.tstring
-			result = (*global_scope)[var_name].value
+			result, _ = strconv.ParseFloat(v.token.tstring, 64)
+		}
+		return result
+	default:
+		fmt.Printf("Type unknown %T\n", v)
+		val, ok := node.(*lexemes)
+		fmt.Println(val, ok)
 	}
-	return result
-	*/
 	return 0
 }
 
@@ -576,7 +572,6 @@ func (s SymbolTable) fill_symbol_table(i interface{}) {
 	case *Block:
 		fmt.Println("Type Block")
 		for _, variable := range *(v.varlist) {
-			//fmt.Println(key, variable)
 			s.fill_symbol_table(variable)
 		}
 		s.fill_symbol_table(v.compound)
@@ -600,6 +595,7 @@ func (s SymbolTable) fill_symbol_table(i interface{}) {
 			os.Exit(-1)
 		}
 	case *Assign:
+		fmt.Println("Type Assign")
 		var_name := v.variable.token.tstring
 		_, ok := s.lookup(var_name)
 		if ok == false {
@@ -607,7 +603,6 @@ func (s SymbolTable) fill_symbol_table(i interface{}) {
 			os.Exit(-1)
 		}
 		s.fill_symbol_table(v.expr)
-		fmt.Println("Type Assign")
 	case *Node:
 		fmt.Println("Type Node")
 		s.fill_symbol_table(v.token)
@@ -643,8 +638,16 @@ func (r *rules) Parse() {
 		symbol_table.define(Symbol{"INTEGER_CONST", INTEGER_CONST})
 		symbol_table.define(Symbol{"REAL_CONST", REAL_CONST})
 		symbol_table.fill_symbol_table(tree)
-		
-//		tree.Resolve()
+		fmt.Println("=========================================")
+		interpret_tree(tree)
+		for index, value := range *global_scope {
+			fmt.Println(index, value)
+		}
+		fmt.Println(">>>>>>>>>>>>>SYMBOL_TABLE<<<<<<<<<<<<<<<<<<<")
+		for index, value := range symbol_table {
+			fmt.Println(index, value)
+		}
+		fmt.Println("=========================================")
 	} else {
 		fmt.Fprintf(os.Stderr, "Unexpected token %d '%s'\n", r.lexer.Cur().ttype, r.lexer.Cur().tstring)
 		os.Exit(-1)
