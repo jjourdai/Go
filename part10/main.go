@@ -32,6 +32,8 @@ const (
 	EOF = 20
 	VAR = 21
 	PROGRAM = 22
+	OCOMMENT = 23
+	CCOMMENT = 24
 )
 
 /*
@@ -40,11 +42,11 @@ const (
 
 type lexemes struct {
 	ttype int
-	tvalue string
+	tstring string
 }
 
 func (n *lexemes) String() string {
-	return fmt.Sprintf("type [%d] value '%s'", n.ttype, n.tvalue)
+	return fmt.Sprintf("type [%d] value '%s'", n.ttype, n.tstring)
 }
 
 func init_lex() func(key string) int {
@@ -60,6 +62,8 @@ func init_lex() func(key string) int {
 		"," : COMMA,
 		":" : COLON,
 		"\n" : EOF,
+		"{" : OCOMMENT,
+		"}" : CCOMMENT,
 	}
 	return func(key string) int {
 		return lex[key]
@@ -84,8 +88,8 @@ func reserved_keyword() func(key string) int {
 func store_new_token(tokens *[]lexemes, new_token **lexemes) {
 	keyword := reserved_keyword()
 	if *new_token != nil {
-		(*new_token).tvalue = strings.ToUpper((*new_token).tvalue)
-		if kword := keyword((*new_token).tvalue); kword != 0 {
+		(*new_token).tstring = strings.ToUpper((*new_token).tstring)
+		if kword := keyword((*new_token).tstring); kword != 0 {
 			(*new_token).ttype = kword
 		}
 		*tokens = append(*tokens, **new_token)
@@ -98,8 +102,15 @@ func tokenize(expr string) []lexemes {
 	var tokens []lexemes
 	var new_token *lexemes
 	length := len(expr)
+	comment_mode := false
 	for index := 0 ; index < length; index++ {
 		switch {
+		case expr[index] == '}':
+			comment_mode = false
+		case expr[index] == '{' || comment_mode == true:
+			store_new_token(&tokens, &new_token)
+			comment_mode = true
+			continue
 		case unicode.IsSpace(rune(expr[index])):
 			store_new_token(&tokens, &new_token)
 			continue
@@ -107,7 +118,7 @@ func tokenize(expr string) []lexemes {
 			if new_token == nil {
 				new_token = &lexemes{INTEGER, ""}
 			}
-			new_token.tvalue += string(expr[index])
+			new_token.tstring += string(expr[index])
 		case expr[index] >= 65 && expr[index] <= 90 || expr[index] >= 97 && expr[index] <= 122 || expr[index] == '_':
 			if new_token != nil && new_token.ttype != WORD {
 				store_new_token(&tokens, &new_token)
@@ -115,13 +126,13 @@ func tokenize(expr string) []lexemes {
 			if new_token == nil {
 				new_token = &lexemes{WORD, ""}
 			}
-			new_token.tvalue += string(expr[index])
+			new_token.tstring += string(expr[index])
 		case expr[index] == ':' && index < length - 1 && expr[index + 1] == '=':
 			store_new_token(&tokens, &new_token)
 			tokens = append(tokens, lexemes{ASSIGN, ":="})
 			index++
 		case expr[index] == '.' && new_token.ttype == INTEGER:
-			new_token.tvalue += string(expr[index])
+			new_token.tstring += string(expr[index])
 			new_token.ttype = REAL
 		default:
 			store_new_token(&tokens, &new_token)
@@ -172,7 +183,6 @@ type Element interface {
 
 type Compound struct {
 	elem []Element
-	scope map[string]int64
 }
 
 func (c Compound) Resolve() {
@@ -187,9 +197,15 @@ func (c Compound) Resolve() {
 				fmt.Println("Type Var")
 			case *Assign:
 				fmt.Println("Type Assign")
-				var_name := v.variable.token.tvalue
-				c.scope[var_name] = run(v.expr, c)
-				fmt.Println("result :=", c.scope[var_name])
+				var_name := v.variable.token.tstring
+				_, ok := (*global_varlist)[var_name]
+				if ok == true {
+					(*global_varlist)[var_name].value = run(v.expr)
+				} else {
+					fmt.Fprintf(os.Stderr, "Semantic Error: %s undeclared \n", var_name)
+					os.Exit(-1)
+				}
+				run(v.expr)
 			case *Node:
 				fmt.Println("Type Node")
 			default:
@@ -204,13 +220,13 @@ type Elem_list struct {
 }
 
 func (c Elem_list) Resolve() {
-
 }
 
 type Spec int
 func (c Spec) Resolve() {
 }
 
+var global_varlist *VarList = nil
 type VarList map[string]*Var
 
 func (c *VarList) Resolve() {
@@ -219,6 +235,11 @@ func (c *VarList) Resolve() {
 type Var struct {
 	token *lexemes
 	spec *Spec
+	value float64
+}
+
+func (v *Var) String() string {
+	return fmt.Sprintf("%v type := %s := %f", v.token, reverse_lex[int(*v.spec)], v.value)
 }
 
 func (c *Var) Resolve() {
@@ -239,7 +260,7 @@ func (b *Block) Resolve() {
 }
 
 type Assign struct {
-	variable Var
+	variable *Var
 	token *lexemes
 	expr *Node
 }
@@ -275,11 +296,11 @@ func (l *lexer) Next() *lexemes {
 
 func (r *rules) digest(needed int) {
 	if needed == r.lexer.Cur().ttype {
-		fmt.Printf("Digest := [%d] '%s'\n", r.lexer.Cur().ttype, r.lexer.Cur().tvalue)
+		fmt.Printf("Digest := [%d] '%s'\n", r.lexer.Cur().ttype, r.lexer.Cur().tstring)
 		r.lexer.Next()
 	} else {
 		fmt.Fprintf(os.Stderr, "Syntax Error waiting for [%s] has [%s] for %s\n",
-			reverse_lex[needed], reverse_lex[r.lexer.Cur().ttype], r.lexer.Cur().tvalue)
+			reverse_lex[needed], reverse_lex[r.lexer.Cur().ttype], r.lexer.Cur().tstring)
 		os.Exit(-1)
 	}
 }
@@ -346,10 +367,10 @@ func (r *rules) expr() *Node {
 	return node
 }
 
-func (r *rules) variable() Var {
+func (r *rules) variable() *Var {
 	token := r.lexer.Cur()
 	r.digest(WORD)
-	return Var{token, nil}
+	return &Var{token, nil, 0}
 }
 
 func (r *rules) assignment_statement() Element {
@@ -387,7 +408,7 @@ func (r *rules) compound_statement() Element {
 	r.digest(BEGIN)
 	node := r.statement_list()
 	r.digest(END)
-	root := Compound{node.elem, make(map[string]int64)}
+	root := Compound{node.elem}
 	return &root
 }
 
@@ -401,7 +422,7 @@ func (r *rules) type_spec() Element {
 		r.digest(REAL)
 		return Spec(REAL)
 	default:
-		fmt.Fprintf(os.Stderr, "Semantic Error: %s unknown type\n", token.tvalue)
+		fmt.Fprintf(os.Stderr, "Semantic Error: %s unknown type\n", token.tstring)
 		os.Exit(-1)
 	}
 	return nil
@@ -410,11 +431,11 @@ func (r *rules) type_spec() Element {
 func (r *rules) variable_declaration() Elem_list {
 	variable := r.variable()
 	list := Elem_list{}
-	list.elem = append(list.elem, &variable)
+	list.elem = append(list.elem, variable)
 	for ; r.lexer.Cur().ttype == COMMA ; {
 		r.digest(COMMA)
 		variable = r.variable()
-		list.elem = append(list.elem, &variable)
+		list.elem = append(list.elem, variable)
 	}
 	r.digest(COLON)
 	type_spec := r.type_spec()
@@ -429,18 +450,18 @@ func (r *rules) declaration() *VarList {
 		list := r.variable_declaration()
 		length := len(list.elem)
 		index := 0
-		type_spec, _ := list.elem[index].(Spec)
-		for ; index > length - 1; index++ {
-				variable, _ := list.elem[index].(*Var)
-						varlist[variable.token.tvalue] = variable
-						variable.spec = &type_spec
+		type_spec, _ := list.elem[length - 1].(Spec)
+		for ; index < length - 1; index++ {
+			variable, _ := list.elem[index].(*Var)
+			varlist[variable.token.tstring] = variable
+			variable.spec = &type_spec
 		}
 		r.digest(SEMI)
 	}
 	return &varlist
 }
 
-func (r *rules) block() Element {
+func (r *rules) block() *Block {
 	return &Block{r.declaration(), r.compound_statement()}
 }
 
@@ -449,12 +470,16 @@ func (r *rules) program() Element {
 	r.variable()
 	r.digest(SEMI)
 	node := r.block()
+	global_varlist = node.varlist
+for index, value := range *node.varlist {
+	fmt.Println(index, value)
+}
 	r.digest(DOT)
 	return node
 }
 
-func run(elem Element, c Compound) int64 {
-	var result, left, right int64
+func run(elem Element) float64 {
+	var result, left, right float64
 	var test *Node
 	test, ok := elem.(*Node)
 	if ok == false {
@@ -462,10 +487,10 @@ func run(elem Element, c Compound) int64 {
 		os.Exit(-1)
 	}
 	if test.left != nil {
-		left = run(test.left, c)
+		left = run(test.left)
 	}
 	if test.right != nil {
-		right = run(test.right, c)
+		right = run(test.right)
 	}
 	switch test.token.ttype {
 		case MINUS:
@@ -476,19 +501,22 @@ func run(elem Element, c Compound) int64 {
 			result = left / right
 		case MUL:
 			result = left * right
-		case MOD:
-			result = left % right
+//		case MOD:
+//			result = left % right
 		case INTEGER:
-			result, _ = strconv.ParseInt(test.token.tvalue, 10, 64)
-//		case REAL:
-//			result, _ = strconv.ParseFloat(test.token.tvalue, 64)
+			tmp, _ := strconv.ParseInt(test.token.tstring, 10, 64)
+			result = float64(tmp)
+		case REAL:
+			result, _ = strconv.ParseFloat(test.token.tstring, 64)
 		case WORD:
-			var_name := test.token.tvalue
-			value, ok := c.scope[var_name]
+			var_name := test.token.tstring
+			_, ok := (*global_varlist)[var_name]
+	//		fmt.Println(var_name)
 			if ok == true {
-				result = value
+				result = (*global_varlist)[var_name].value
 			} else {
 				fmt.Fprintf(os.Stderr, "Semantic Error: %s undeclared \n", var_name)
+				os.Exit(-1)
 			}
 	}
 	return result
@@ -499,8 +527,12 @@ func (r *rules) Parse() {
 	if r.lexer.Cur().ttype == EOF {
 		fmt.Println("Parsing FINISHED")
 		node.Resolve()
+		fmt.Println("\\\\\\\\\\\\\\\\ Result /////////")
+		for index, value := range *global_varlist {
+			fmt.Println(index, value)
+		}
 	} else {
-		fmt.Fprintf(os.Stderr, "Unexpected token %d '%s'\n", r.lexer.Cur().ttype, r.lexer.Cur().tvalue)
+		fmt.Fprintf(os.Stderr, "Unexpected token %d '%s'\n", r.lexer.Cur().ttype, r.lexer.Cur().tstring)
 		os.Exit(-1)
 	}
 }
@@ -542,9 +574,8 @@ func main() {
 	tokens := tokenize(string(data))
 
 	for i, j := range tokens {
-		fmt.Printf("Token[%d] := {%s} '%s'\n", i, reverse_lex[j.ttype], j.tvalue)
+		fmt.Printf("Token[%d] := {%s} '%s'\n", i, reverse_lex[j.ttype], j.tstring)
 	}
-
 	rules := rules{lexer{0, len(tokens), tokens}}
 	rules.Parse()
 }
