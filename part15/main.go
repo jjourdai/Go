@@ -590,23 +590,27 @@ func (r *rules) declaration() Elem_list {
 	token := r.lexer.Cur()
 	declare_list := Elem_list{}
 	token = r.lexer.Cur()
-	if token.ttype == VAR {
-		r.digest(VAR)
-		for ; r.lexer.Cur().ttype == ID; {
-			list := r.variable_declaration()
-			length := len(list.elem)
-			index := 0
-			type_spec, _ := list.elem[length - 1].(*Spec)
-			for ; index < length - 1; index++ {
-				variable, _ := list.elem[index].(*VarDeclaration)
-				variable.spec = type_spec
-				declare_list.elem = append(declare_list.elem, variable)
+	for {
+		token = r.lexer.Cur()
+		if token.ttype == VAR {
+			r.digest(VAR)
+			for ; r.lexer.Cur().ttype == ID; {
+				list := r.variable_declaration()
+				length := len(list.elem)
+				index := 0
+				type_spec, _ := list.elem[length - 1].(*Spec)
+				for ; index < length - 1; index++ {
+					variable, _ := list.elem[index].(*VarDeclaration)
+					variable.spec = type_spec
+					declare_list.elem = append(declare_list.elem, variable)
+				}
+				r.digest(SEMI)
 			}
-			r.digest(SEMI)
+		} else if token.ttype == PROCEDURE {
+			declare_list.elem = append(declare_list.elem, r.procedure_declaration())
+		} else {
+			break
 		}
-	}
-	for token = r.lexer.Cur(); token.ttype == PROCEDURE; token = r.lexer.Cur() {
-		declare_list.elem = append(declare_list.elem, r.procedure_declaration())
 	}
 	return declare_list
 }
