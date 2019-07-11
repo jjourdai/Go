@@ -132,6 +132,7 @@ func (p *ProcedureSymbol) String() string {
 type VarSymbol struct {
 	name string
 	stype *BuiltinSymbol
+	value float64
 }
 
 func (v *VarSymbol) getName() string {
@@ -139,10 +140,18 @@ func (v *VarSymbol) getName() string {
 }
 
 func (v *VarSymbol) String() string {
-	return fmt.Sprintf("%s: <%s>", v.name, v.stype)
+	if v.stype.name == "INTEGER_CONST" {
+		return fmt.Sprintf("%s: <%s val = %d]>", v.name, v.stype, int64(v.value))
+	} else {
+		return fmt.Sprintf("%s: <%s val = %f]>", v.name, v.stype, v.value)
+	}
 }
 
 type SemanticsAnalyser struct {
+	scope *ScopedSymbolTable
+}
+
+type Interpreter struct {
 	scope *ScopedSymbolTable
 }
 
@@ -151,12 +160,16 @@ type ScopedSymbolTable struct {
 	scope_name string
 	scope_level int
 	enclosing_scope *ScopedSymbolTable
+	inferior_scope []*ScopedSymbolTable
 }
 
 func (s ScopedSymbolTable) String() string {
 	repr := fmt.Sprintf("SymbolTable := %s at scope %d\n", s.scope_name, s.scope_level)
 	for _, value := range s.symbols {
 			repr += fmt.Sprintf("	%v\n", value)
+	}
+	if s.inferior_scope != nil {
+		repr += fmt.Sprintf("%v", s.inferior_scope);
 	}
 	return repr
 }
@@ -633,31 +646,46 @@ func (r *rules) program() *Block {
 	Interpreter
 */
 
-func interpret_tree(node interface{}) float64 {
+func (i *Interpreter) run(node interface{}) float64 {
 	var result float64
 	switch v := node.(type) {
 	case *ProcedureDecl:
-		fmt.Println("Type ProcedurDecl")
+//		fmt.Println("Type ProcedurDecl")
+		fmt.Println(v.proc_name)
+		i.run(v.block)
 	case *Block:
-		fmt.Println("Type Block")
-		interpret_tree(v.compound)
+//		fmt.Println("Type Block")
+		list := v.declaration_list.elem
+		for _, variable := range list {
+			i.run(variable)
+		}
+		i.run(v.compound)
 	case *Compound:
-		fmt.Println("Type Compound")
+//		fmt.Println("Type Compound")
 		for _, elem := range v.elem {
-			interpret_tree(elem)
+			i.run(elem)
 		}
 	case *VarDeclaration:
-		fmt.Println("Type VarDeclaration")
+//		fmt.Println("Type VarDeclaration")
 	case *Var:
-		result = (*global_scope)[v.token.tstring].value
-		return result
+		var_symbol, _ := i.scope.lookup(v.token.tstring, false)
+		result, ok := var_symbol.(*VarSymbol)
+		if ok == false {
+			return 0
+		} else {
+			return result.value
+		}
 	case *Assign:
-		fmt.Println("Type Assign")
+//		fmt.Println("Type Assign")
 		var_name := v.variable.token.tstring
-		(*global_scope)[var_name] = v.variable
-		(*global_scope)[var_name].value = interpret_tree(v.expr)
+		var_symbol, _ := i.scope.lookup(var_name, false)
+		result, ok := var_symbol.(*VarSymbol)
+		if ok == false {
+			return 0
+		}
+		result.value = i.run(v.expr)
 	case *Node:
-		fmt.Println("Type Node")
+//		fmt.Println("Type Node")
 		var result, left, right float64
 		var test *Node
 		test, ok := node.(*Node)
@@ -666,10 +694,10 @@ func interpret_tree(node interface{}) float64 {
 			os.Exit(-1)
 		}
 		if test.left != nil {
-			left = interpret_tree(test.left)
+			left = i.run(test.left)
 		}
 		if test.right != nil {
-			right = interpret_tree(test.right)
+			right = i.run(test.right)
 		}
 		switch cur := test.token.(type) {
 		case *Op:
@@ -686,16 +714,19 @@ func interpret_tree(node interface{}) float64 {
 				result = left * right
 			case ID:
 				var_name := cur.token.tstring
-				result = (*global_scope)[var_name].value
+				var_symbol, _ := i.scope.lookup(var_name, false)
+				symbol := var_symbol.(*VarSymbol)
+				result = symbol.value
+				fmt.Println("============== := ",result)
 			}
 		default:
-			result = interpret_tree(cur)
+			result = i.run(cur)
 		}
 		return result
 	case *Op:
-		fmt.Println("Type Op")
+//		fmt.Println("Type Op")
 	case *Number:
-		fmt.Println("Type Number")
+//		fmt.Println("Type Number")
 		switch v.token.ttype {
 		case INTEGER_CONST:
 			tmp, _ := strconv.ParseInt(v.token.tstring, 10, 64)
@@ -715,21 +746,24 @@ func interpret_tree(node interface{}) float64 {
 func (s SemanticsAnalyser) check(i interface{}) {
 	switch v := i.(type) {
 	case *ProcedureDecl:
-		fmt.Print(s.scope)
 		fmt.Println("Type ProcedurDecl")
 		fmt.Printf("ENTER scope: %s\n", v.proc_name)
+		_, ok := s.scope.lookup(v.proc_name, true)
+		if ok == true {
+			fmt.Fprintf(os.Stderr, "Semantic Error: procedure %s already declared \n", v.proc_name)
+		}
 		proc_symbol := ProcedureSymbol{v.proc_name, []*VarSymbol{}}
 		s.scope.insert(&proc_symbol)
-		new_scope := ScopedSymbolTable{make(map[string]Symbol), v.proc_name, 1, s.scope}
+		new_scope := ScopedSymbolTable{make(map[string]Symbol), v.proc_name, s.scope.scope_level + 1, s.scope, nil}
+		s.scope.inferior_scope = append(s.scope.inferior_scope, &new_scope)
 		s.scope = &new_scope
 		for _, param := range v.params {
 			type_symbol, _ := s.scope.lookup(param.var_type.sstring, false)
 			builtin_symbol := (type_symbol).(*BuiltinSymbol)
-			var_symbol := VarSymbol{param.var_name.token.tstring, builtin_symbol}
+			var_symbol := VarSymbol{param.var_name.token.tstring, builtin_symbol, 0}
 			s.scope.insert(&var_symbol)
 			proc_symbol.params = append(proc_symbol.params, &var_symbol)
 		}
-		fmt.Print(new_scope)
 		s.check(v.block)
 		s.scope = s.scope.enclosing_scope
 		fmt.Printf("LEAVE scope: %s\n", v.proc_name)
@@ -755,7 +789,7 @@ func (s SemanticsAnalyser) check(i interface{}) {
 			fmt.Fprintf(os.Stderr, "Semantic Error: %s already declaed \n", var_name, v.token.line, v.token.column)
 			os.Exit(-1)
 		}
-		new_var_symbol := &VarSymbol{var_name, builtin_symbol}
+		new_var_symbol := &VarSymbol{var_name, builtin_symbol, 0}
 		s.scope.insert(new_var_symbol)
 	case *Var:
 		fmt.Println("Type Var")
@@ -784,8 +818,8 @@ func (s SemanticsAnalyser) check(i interface{}) {
 		fmt.Println("Type Number")
 	default:
 		fmt.Printf("Type unknown %T\n", v)
-		val, ok := i.(*lexemes)
-		fmt.Println(val, ok)
+	//	val, ok := i.(*lexemes)
+	//	fmt.Println(val, ok)
 	}
 }
 
@@ -793,19 +827,14 @@ func (r *rules) Parse() {
 	tree := r.program()
 	if r.lexer.Cur().ttype == EOF {
 		fmt.Println("Parsing FINISHED")
-		init := make(VarInit)
-		global_scope = &init
-		fmt.Println("=========================================")
-		symbol_table := ScopedSymbolTable{make(map[string]Symbol), "Global", 0, nil}
+		symbol_table := ScopedSymbolTable{make(map[string]Symbol), "Global", 0, nil, nil}
 		symbol_table.insert(&BuiltinSymbol{"INTEGER_CONST"})
 		symbol_table.insert(&BuiltinSymbol{"REAL_CONST"})
 		semantics_analyser := SemanticsAnalyser{&symbol_table}
 		semantics_analyser.check(tree)
-		fmt.Println("=========================================")
-		interpret_tree(tree)
-		for index, value := range *global_scope {
-			fmt.Println(index, value)
-		}
+		interpreter := Interpreter{&symbol_table}
+		fmt.Println("INTERPRET START")
+		interpreter.run(tree)
 		fmt.Println(">>>>>>>>>>>>>SYMBOL_TABLE<<<<<<<<<<<<<<<<<<<")
 		fmt.Print(symbol_table)
 		fmt.Println("=========================================")
